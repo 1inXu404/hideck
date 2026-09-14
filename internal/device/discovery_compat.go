@@ -335,23 +335,49 @@ func findATPortsInUSBInterfaceOrder(usbPath string) []string {
 	return ports
 }
 
+const (
+	quectelVendorID              = 0x2c7c
+	quectel0125ProductID         = 0x0125
+	quectel0125SerialPortCount   = 4
+	quectel0125ATSerialPortIndex = 2
+)
+
 // selectBestATPortForUSBDevice keeps the legacy heuristic for all devices
-// except the Quectel EC25 (2c7c:0125). EC25 exposes four serial functions in
-// DM, NMEA, AT, Modem order. Selecting the third device-local serial function
-// works for both common QMI (interfaces 0..3) and RNDIS (interfaces 2..5)
-// layouts, while remaining independent of global ttyUSB numbering.
+// except the Quectel 2c7c:0125 family. These modules expose four serial
+// functions in DM, NMEA, AT, Modem order. Selecting the third device-local
+// serial function works for both common QMI (interfaces 0..3) and RNDIS
+// (interfaces 2..5) layouts, while remaining independent of global ttyUSB
+// numbering.
 //
 // Require all four serial functions to be present; during partial hotplug
 // enumeration fall back to the existing heuristic rather than guessing from
-// an incomplete device-local sequence.
+// an incomplete device-local sequence. Also require the ordered snapshot to
+// match the caller's candidate snapshot so a concurrent USB enumeration cannot
+// return an AT port that the discovered device does not own yet.
 func selectBestATPortForUSBDevice(usbPath string, vendorID, productID uint16, atPorts []string) (bestPort, imei string) {
-	if vendorID == 0x2c7c && productID == 0x0125 {
-		ports := findATPortsInUSBInterfaceOrder(usbPath)
-		if len(ports) == 4 {
-			return ports[2], ""
-		}
+	if vendorID != quectelVendorID || productID != quectel0125ProductID {
+		return selectBestATPort(atPorts)
+	}
+
+	ports := findATPortsInUSBInterfaceOrder(usbPath)
+	if sameATPortSet(ports, atPorts) && len(ports) == quectel0125SerialPortCount {
+		return ports[quectel0125ATSerialPortIndex], ""
 	}
 	return selectBestATPort(atPorts)
+}
+
+func sameATPortSet(left, right []string) bool {
+	left = dedupSortedNonEmpty(left)
+	right = dedupSortedNonEmpty(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func selectBestATPort(atPorts []string) (bestPort, imei string) {
