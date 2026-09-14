@@ -149,37 +149,13 @@ func discoverQMIDeviceFromSysFS(usbPath string) (*QMIDevice, error) {
 		ControlPath:  capability.ControlPath,
 	}
 
-	// atIntf 只是一个静态“主候选口”提示，来自常见 Quectel 机型的 interface 经验值；
-	// 真正哪个 AT 口可用，仍由上层在本设备 ATPorts 范围内继续探测确认。
-	atIntf := -1
-	if vid == 0x2c7c {
-		switch pid {
-		case 0x0901, 0x0902, 0x8101:
-			atIntf = 2
-		case 0x0900:
-			atIntf = 4
-		case 0x6026, 0x6005, 0x6002, 0x6001:
-			atIntf = 3
-		case 0x6007:
-			atIntf = 3
-		default:
-			atIntf = 2
-		}
-	} else if vid == 0x05c6 {
-		atIntf = 2
-	}
-
-	// discovery 阶段保留该设备下的全部 AT 候选口，避免过早做主观裁剪。
-	md.ATPorts = findATPorts(scanUSBPath)
-
-	staticPrimary := ""
-	if atIntf != -1 {
-		atIfPath := filepath.Join(scanUSBPath, fmt.Sprintf("%s:1.%d", filepath.Base(scanUSBPath), atIntf))
-		primary, err := findTTYInInterface(atIfPath)
-		if err == nil && primary != "" {
-			staticPrimary = primary
-		}
-	}
+	// 静态候选与 fallback 共用一份 USB 接口规则；真实可用性仍由上层
+	// 限定在本设备候选集合内探测确认。
+	portScan := scanATPortsForUSBDevice(scanUSBPath)
+	md.ATPorts = portScan.candidates
+	staticPrimary, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: vid, productID: pid}, "qmi", portScan,
+	)
 	md.ATPort, md.ATPortBackup = chooseStaticATPorts(md.ATPorts, staticPrimary)
 
 	md.AudioDevice, md.AudioCardNum = findAudioDevice(scanUSBPath)

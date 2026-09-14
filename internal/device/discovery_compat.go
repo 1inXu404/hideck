@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -148,10 +147,10 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 
 	vid := readHexFile16(filepath.Join(scanUSBPath, "idVendor"))
 	pid := readHexFile16(filepath.Join(scanUSBPath, "idProduct"))
+	identity := usbDeviceIdentity{vendorID: vid, productID: pid}
 	if capability, ok := detectQMIUSBCapability(scanUSBPath); ok {
-		atPorts := findATPortsInUSBPath(scanUSBPath)
-		atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
 		mode := classifyMode(capability.ControlPath, capability.DriverName)
+		atPorts, atPort, imei := discoverATPortsForUSBDevice(scanUSBPath, identity, mode)
 		return CompatibleModem{
 			ControlPath:    capability.ControlPath,
 			NetInterface:   capability.NetInterface,
@@ -169,9 +168,8 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 		}, true
 	}
 	if capability, ok := detectMBIMUSBCapability(scanUSBPath); ok {
-		atPorts := findATPortsInUSBPath(scanUSBPath)
-		atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
 		mode := classifyMode(capability.ControlPath, capability.DriverName)
+		atPorts, atPort, imei := discoverATPortsForUSBDevice(scanUSBPath, identity, mode)
 		return CompatibleModem{
 			ControlPath:    capability.ControlPath,
 			NetInterface:   capability.NetInterface,
@@ -194,14 +192,12 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 	}
 
 	iface, driver := findNetInterfaceAndDriver(scanUSBPath)
-	atPorts := findATPortsInUSBPath(scanUSBPath)
-	atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
+	controlPath := findCDCWDMInUSBPath(scanUSBPath)
+	mode := classifyMode(controlPath, driver)
+	atPorts, atPort, imei := discoverATPortsForUSBDevice(scanUSBPath, identity, mode)
 	if atPort == "" {
 		return CompatibleModem{}, false
 	}
-
-	controlPath := findCDCWDMInUSBPath(scanUSBPath)
-	mode := classifyMode(controlPath, driver)
 
 	return CompatibleModem{
 		ControlPath:    controlPath,
@@ -283,170 +279,6 @@ func resolveUSBPathForScan(usbPath string) string {
 		return p
 	}
 	return resolved
-}
-
-func findATPortsInUSBPath(usbPath string) []string {
-	ports := make([]string, 0)
-	for _, ttyPattern := range []string{"ttyUSB*", "ttyACM*"} {
-		patterns := []string{
-			filepath.Join(usbPath, "*", ttyPattern),
-			filepath.Join(usbPath, "*", "tty", ttyPattern),
-		}
-		for _, pattern := range patterns {
-			matches, _ := filepath.Glob(pattern)
-			for _, match := range matches {
-				ports = append(ports, filepath.Join("/dev", filepath.Base(match)))
-			}
-		}
-	}
-	return sortATPortCandidates(ports)
-}
-
-// findATPortsInUSBInterfaceOrder returns serial ports in device-local USB
-// interface order. Unlike /dev/ttyUSB<N>, USB interface numbers are scoped to
-// the modem and therefore do not shift when another modem is plugged in.
-// This is a sysfs-only helper: it never opens or writes to a /dev node.
-func findATPortsInUSBInterfaceOrder(usbPath string) []string {
-	ifaces, _ := filepath.Glob(filepath.Join(usbPath, "*:1.*"))
-	sortUSBInterfacePaths(ifaces)
-
-	seen := make(map[string]struct{})
-	ports := make([]string, 0)
-	for _, ifPath := range ifaces {
-		for _, ttyPattern := range []string{"ttyUSB*", "ttyACM*"} {
-			patterns := []string{
-				filepath.Join(ifPath, ttyPattern),
-				filepath.Join(ifPath, "tty", ttyPattern),
-			}
-			for _, pattern := range patterns {
-				matches, _ := filepath.Glob(pattern)
-				sort.Strings(matches)
-				for _, match := range matches {
-					port := filepath.Join("/dev", filepath.Base(match))
-					if _, ok := seen[port]; ok {
-						continue
-					}
-					seen[port] = struct{}{}
-					ports = append(ports, port)
-				}
-			}
-		}
-	}
-	return ports
-}
-
-const (
-	quectelVendorID              = 0x2c7c
-	quectel0125ProductID         = 0x0125
-	quectel0125SerialPortCount   = 4
-	quectel0125ATSerialPortIndex = 2
-)
-
-// selectBestATPortForUSBDevice keeps the legacy heuristic for all devices
-// except the Quectel 2c7c:0125 family. These modules expose four serial
-// functions in DM, NMEA, AT, Modem order. Selecting the third device-local
-// serial function works for both common QMI (interfaces 0..3) and RNDIS
-// (interfaces 2..5) layouts, while remaining independent of global ttyUSB
-// numbering.
-//
-// Require all four serial functions to be present; during partial hotplug
-// enumeration fall back to the existing heuristic rather than guessing from
-// an incomplete device-local sequence. Also require the ordered snapshot to
-// match the caller's candidate snapshot so a concurrent USB enumeration cannot
-// return an AT port that the discovered device does not own yet.
-func selectBestATPortForUSBDevice(usbPath string, vendorID, productID uint16, atPorts []string) (bestPort, imei string) {
-	if vendorID != quectelVendorID || productID != quectel0125ProductID {
-		return selectBestATPort(atPorts)
-	}
-
-	ports := findATPortsInUSBInterfaceOrder(usbPath)
-	if sameATPortSet(ports, atPorts) && len(ports) == quectel0125SerialPortCount {
-		return ports[quectel0125ATSerialPortIndex], ""
-	}
-	return selectBestATPort(atPorts)
-}
-
-func sameATPortSet(left, right []string) bool {
-	left = dedupSortedNonEmpty(left)
-	right = dedupSortedNonEmpty(right)
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func selectBestATPort(atPorts []string) (bestPort, imei string) {
-	if len(atPorts) == 0 {
-		return "", ""
-	}
-	ports := sortATPortCandidates(atPorts)
-
-	// 斩断万恶之源：绝对不允许发任何哪怕是 1mm 秒的串口实际探测与读写。
-	// 直接根据命名顺序经验盲抽最高优可用口即可，以此杜绝系统硬件占用锁死！
-	return ports[0], ""
-}
-
-func sortATPortCandidates(atPorts []string) []string {
-	out := dedupSortedNonEmpty(atPorts)
-	sort.SliceStable(out, func(i, j int) bool {
-		pi := atPortPriority(out[i])
-		pj := atPortPriority(out[j])
-		if pi != pj {
-			return pi < pj
-		}
-		return out[i] < out[j]
-	})
-	return out
-}
-
-func atPortPriority(port string) int {
-	base := filepath.Base(strings.TrimSpace(port))
-	if strings.HasPrefix(base, "ttyACM") {
-		n, err := strconv.Atoi(strings.TrimPrefix(base, "ttyACM"))
-		if err != nil {
-			return 1900
-		}
-		return 1000 + n
-	}
-	if !strings.HasPrefix(base, "ttyUSB") {
-		return 2000
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(base, "ttyUSB"))
-	if err != nil {
-		return 900
-	}
-	// 经验值：2~5 更可能是可用 AT 口，其次高位口，再次低位口(0/1 常是诊断/NMEA)。
-	switch {
-	case n >= 2 && n <= 5:
-		return n - 2
-	case n > 5:
-		return 20 + n
-	default:
-		return 200 + n
-	}
-}
-
-func dedupSortedNonEmpty(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		s := strings.TrimSpace(v)
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func readHexFile16(path string) uint16 {

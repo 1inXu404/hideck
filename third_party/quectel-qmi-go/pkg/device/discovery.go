@@ -151,27 +151,7 @@ func discoverFromSysFS(usbPath string) (*manager.ModemDevice, error) {
 		// 回退到更广泛的搜索
 		md.ControlPath = findCDCWDMInUSB(scanUSBPath)
 	}
-	// device.c 针对 ECM/RNDIS/NCM 的逻辑 (但也适用于 QMI 的 AT 命令)
-	atIntf := -1
-	if vid == 0x2c7c {
-		switch pid {
-		case 0x0901, 0x0902, 0x8101: // EC200U, EC200D, RG801H
-			atIntf = 2
-		case 0x0900: // RG500U
-			atIntf = 4
-		case 0x6026, 0x6005, 0x6002, 0x6001: // EC200T, EC200A, EC200S, EC100Y
-			atIntf = 3
-		case 0x6007: // EG915Q/EG800Q
-			// if RDNIS_MODEL == 1 { atIntf = 5 } else { atIntf = 3 }
-			atIntf = 3 // 暂时假设默认值
-		default:
-			// 对于 EC20 (pid 0x0125) 和其他型号，典型默认值为 2
-			atIntf = 2
-		}
-	} else if vid == 0x05c6 {
-		// 高通默认值
-		atIntf = 2
-	}
+	atIntf := staticATInterfaceForUSBMode(vid, pid, md.DriverName)
 
 	// 收集该 USB 设备下的全部 ttyUSB 候选口；实际可用性由上层自行探测。
 	md.ATPorts = findATPorts(scanUSBPath)

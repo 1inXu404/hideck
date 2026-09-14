@@ -452,12 +452,17 @@ func TestSelectBestATPortForUSBDeviceEC25UsesDeviceLocalInterfaceOrder(t *testin
 		t.Fatalf("test setup: legacy ATPort=%q want /dev/ttyUSB4", legacy)
 	}
 
-	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	portScan := scanATPortsForUSBDevice(usbPath)
+	got, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: 0x2c7c, productID: 0x0125}, "rndis", portScan,
+	)
 	if got != "/dev/ttyUSB6" {
 		t.Fatalf("EC25 ATPort=%q want /dev/ttyUSB6 (third device-local serial interface)", got)
 	}
 
-	fallback, _ := selectBestATPortForUSBDevice(usbPath, 0x1199, 0x9077, atPorts)
+	fallback, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: 0x1199, productID: 0x9077}, "rndis", portScan,
+	)
 	if fallback != legacy {
 		t.Fatalf("non-EC25 ATPort=%q want legacy choice %q", fallback, legacy)
 	}
@@ -486,7 +491,9 @@ func TestSelectBestATPortForUSBDeviceEC25QMIUsesDeviceLocalInterfaceOrder(t *tes
 		t.Fatalf("test setup: legacy ATPort=%q want /dev/ttyUSB8", legacy)
 	}
 
-	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	got, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: 0x2c7c, productID: 0x0125}, "qmi", scanATPortsForUSBDevice(usbPath),
+	)
 	if got != "/dev/ttyUSB10" {
 		t.Fatalf("EC25 ATPort=%q want /dev/ttyUSB10 (third device-local serial interface)", got)
 	}
@@ -510,7 +517,9 @@ func TestSelectBestATPortForUSBDeviceEC25IncompleteEnumerationFallsBack(t *testi
 
 	atPorts := findATPortsInUSBPath(usbPath)
 	legacy, _ := selectBestATPort(atPorts)
-	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	got, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: 0x2c7c, productID: 0x0125}, "rndis", scanATPortsForUSBDevice(usbPath),
+	)
 	if got != legacy {
 		t.Fatalf("incomplete EC25 ATPort=%q want legacy choice %q", got, legacy)
 	}
@@ -535,7 +544,13 @@ func TestSelectBestATPortForUSBDeviceEC25RejectsNewerSysfsSnapshot(t *testing.T)
 
 	initialSnapshot := []string{"/dev/ttyUSB4", "/dev/ttyUSB5"}
 	legacy, _ := selectBestATPort(initialSnapshot)
-	got, _ := selectBestATPortForUSBDevice(usbPath, quectelVendorID, quectel0125ProductID, initialSnapshot)
+	portScan := scanATPortsForUSBDevice(usbPath)
+	portScan.candidates = initialSnapshot
+	got, _ := selectBestATPortForUSBDevice(
+		usbDeviceIdentity{vendorID: quectelVendorID, productID: quectel0125ProductID},
+		"rndis",
+		portScan,
+	)
 	if got != legacy {
 		t.Fatalf("ATPort=%q want initial snapshot fallback %q", got, legacy)
 	}
