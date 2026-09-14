@@ -381,3 +381,90 @@ func TestFindATPortsInUSBPathCollectsTTYUSBandTTYACM(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectBestATPortForUSBDeviceEC25UsesDeviceLocalInterfaceOrder(t *testing.T) {
+	usbPath := t.TempDir()
+
+	for _, tc := range []struct {
+		iface string
+		tty   string
+	}{
+		{iface: "1-1.2:1.2", tty: "ttyUSB4"},
+		{iface: "1-1.2:1.3", tty: "ttyUSB5"},
+		{iface: "1-1.2:1.4", tty: "ttyUSB6"},
+		{iface: "1-1.2:1.5", tty: "ttyUSB7"},
+	} {
+		if err := os.MkdirAll(filepath.Join(usbPath, tc.iface, tc.tty), 0o755); err != nil {
+			t.Fatalf("mkdir %s/%s: %v", tc.iface, tc.tty, err)
+		}
+	}
+
+	atPorts := findATPortsInUSBPath(usbPath)
+	legacy, _ := selectBestATPort(atPorts)
+	if legacy != "/dev/ttyUSB4" {
+		t.Fatalf("test setup: legacy ATPort=%q want /dev/ttyUSB4", legacy)
+	}
+
+	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	if got != "/dev/ttyUSB6" {
+		t.Fatalf("EC25 ATPort=%q want /dev/ttyUSB6 (third device-local serial interface)", got)
+	}
+
+	fallback, _ := selectBestATPortForUSBDevice(usbPath, 0x1199, 0x9077, atPorts)
+	if fallback != legacy {
+		t.Fatalf("non-EC25 ATPort=%q want legacy choice %q", fallback, legacy)
+	}
+}
+
+func TestSelectBestATPortForUSBDeviceEC25QMIUsesDeviceLocalInterfaceOrder(t *testing.T) {
+	usbPath := t.TempDir()
+
+	for _, tc := range []struct {
+		iface string
+		tty   string
+	}{
+		{iface: "2-1:1.0", tty: "ttyUSB8"},
+		{iface: "2-1:1.1", tty: "ttyUSB9"},
+		{iface: "2-1:1.2", tty: "ttyUSB10"},
+		{iface: "2-1:1.3", tty: "ttyUSB11"},
+	} {
+		if err := os.MkdirAll(filepath.Join(usbPath, tc.iface, tc.tty), 0o755); err != nil {
+			t.Fatalf("mkdir %s/%s: %v", tc.iface, tc.tty, err)
+		}
+	}
+
+	atPorts := findATPortsInUSBPath(usbPath)
+	legacy, _ := selectBestATPort(atPorts)
+	if legacy != "/dev/ttyUSB8" {
+		t.Fatalf("test setup: legacy ATPort=%q want /dev/ttyUSB8", legacy)
+	}
+
+	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	if got != "/dev/ttyUSB10" {
+		t.Fatalf("EC25 ATPort=%q want /dev/ttyUSB10 (third device-local serial interface)", got)
+	}
+}
+
+func TestSelectBestATPortForUSBDeviceEC25IncompleteEnumerationFallsBack(t *testing.T) {
+	usbPath := t.TempDir()
+
+	for _, tc := range []struct {
+		iface string
+		tty   string
+	}{
+		{iface: "1-1.2:1.2", tty: "ttyUSB4"},
+		{iface: "1-1.2:1.3", tty: "ttyUSB5"},
+		{iface: "1-1.2:1.4", tty: "ttyUSB6"},
+	} {
+		if err := os.MkdirAll(filepath.Join(usbPath, tc.iface, tc.tty), 0o755); err != nil {
+			t.Fatalf("mkdir %s/%s: %v", tc.iface, tc.tty, err)
+		}
+	}
+
+	atPorts := findATPortsInUSBPath(usbPath)
+	legacy, _ := selectBestATPort(atPorts)
+	got, _ := selectBestATPortForUSBDevice(usbPath, 0x2c7c, 0x0125, atPorts)
+	if got != legacy {
+		t.Fatalf("incomplete EC25 ATPort=%q want legacy choice %q", got, legacy)
+	}
+}

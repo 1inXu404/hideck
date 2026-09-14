@@ -150,7 +150,7 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 	pid := readHexFile16(filepath.Join(scanUSBPath, "idProduct"))
 	if capability, ok := detectQMIUSBCapability(scanUSBPath); ok {
 		atPorts := findATPortsInUSBPath(scanUSBPath)
-		atPort, imei := selectBestATPort(atPorts)
+		atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
 		mode := classifyMode(capability.ControlPath, capability.DriverName)
 		return CompatibleModem{
 			ControlPath:    capability.ControlPath,
@@ -170,7 +170,7 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 	}
 	if capability, ok := detectMBIMUSBCapability(scanUSBPath); ok {
 		atPorts := findATPortsInUSBPath(scanUSBPath)
-		atPort, imei := selectBestATPort(atPorts)
+		atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
 		mode := classifyMode(capability.ControlPath, capability.DriverName)
 		return CompatibleModem{
 			ControlPath:    capability.ControlPath,
@@ -195,7 +195,7 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 
 	iface, driver := findNetInterfaceAndDriver(scanUSBPath)
 	atPorts := findATPortsInUSBPath(scanUSBPath)
-	atPort, imei := selectBestATPort(atPorts)
+	atPort, imei := selectBestATPortForUSBDevice(scanUSBPath, vid, pid, atPorts)
 	if atPort == "" {
 		return CompatibleModem{}, false
 	}
@@ -300,6 +300,58 @@ func findATPortsInUSBPath(usbPath string) []string {
 		}
 	}
 	return sortATPortCandidates(ports)
+}
+
+// findATPortsInUSBInterfaceOrder returns serial ports in device-local USB
+// interface order. Unlike /dev/ttyUSB<N>, USB interface numbers are scoped to
+// the modem and therefore do not shift when another modem is plugged in.
+// This is a sysfs-only helper: it never opens or writes to a /dev node.
+func findATPortsInUSBInterfaceOrder(usbPath string) []string {
+	ifaces, _ := filepath.Glob(filepath.Join(usbPath, "*:1.*"))
+	sortUSBInterfacePaths(ifaces)
+
+	seen := make(map[string]struct{})
+	ports := make([]string, 0)
+	for _, ifPath := range ifaces {
+		for _, ttyPattern := range []string{"ttyUSB*", "ttyACM*"} {
+			patterns := []string{
+				filepath.Join(ifPath, ttyPattern),
+				filepath.Join(ifPath, "tty", ttyPattern),
+			}
+			for _, pattern := range patterns {
+				matches, _ := filepath.Glob(pattern)
+				sort.Strings(matches)
+				for _, match := range matches {
+					port := filepath.Join("/dev", filepath.Base(match))
+					if _, ok := seen[port]; ok {
+						continue
+					}
+					seen[port] = struct{}{}
+					ports = append(ports, port)
+				}
+			}
+		}
+	}
+	return ports
+}
+
+// selectBestATPortForUSBDevice keeps the legacy heuristic for all devices
+// except the Quectel EC25 (2c7c:0125). EC25 exposes four serial functions in
+// DM, NMEA, AT, Modem order. Selecting the third device-local serial function
+// works for both common QMI (interfaces 0..3) and RNDIS (interfaces 2..5)
+// layouts, while remaining independent of global ttyUSB numbering.
+//
+// Require all four serial functions to be present; during partial hotplug
+// enumeration fall back to the existing heuristic rather than guessing from
+// an incomplete device-local sequence.
+func selectBestATPortForUSBDevice(usbPath string, vendorID, productID uint16, atPorts []string) (bestPort, imei string) {
+	if vendorID == 0x2c7c && productID == 0x0125 {
+		ports := findATPortsInUSBInterfaceOrder(usbPath)
+		if len(ports) == 4 {
+			return ports[2], ""
+		}
+	}
+	return selectBestATPort(atPorts)
 }
 
 func selectBestATPort(atPorts []string) (bestPort, imei string) {
