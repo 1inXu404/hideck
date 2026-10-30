@@ -1,0 +1,31 @@
+DJI 一代模块 USB 参数记录
+记录日期：2026-09-03
+来源：用户在 /dev/ttyUSB2 上执行的 AT 查询结果
+
+型号：QDC507
+固件：QDC507GLEFM21
+USB 身份：2ca3:4006
+USB 网络模式：0（QMI）
+
+原始查询结果：
+AT+QCFG="usbcfg"?
++QCFG: "usbcfg",0x2CA3,0x4006,1,1,1,1,1,0,0
+
+AT+QCFG="usbnet"?
++QCFG: "usbnet",0
+
+按 HiDeck 硬件文档拟使用的 USB 身份配置：
+AT+QCFG="usbcfg",0x2C7C,0x0125,1,1,1,1,1,0,0
+
+需要恢复原 USB 身份时，对同一模块的已确认 AT 口执行：
+AT+QCFG="usbcfg",0x2CA3,0x4006,1,1,1,1,1,0,0
+收到 OK 后，再执行：
+AT+CFUN=1,1
+
+说明：这里只记录已读到的 USB 参数，不是完整固件或 NV 备份。
+配置写入后会持久保存。重启导致 USB 重新枚举，需重新检查 Windows
+的 usbipd list 并连接设备；BUSID 和 Linux 串口编号可能变化。
+创建本文件时尚未执行上述配置写入或重启命令。
+
+对应上游说明：
+https://github.com/yibaiba/hideck/blob/dc4b173a5261a5e0832a26b04a1d6c42415e4e26/docs/modem-hardware.md
